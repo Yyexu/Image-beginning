@@ -3,6 +3,32 @@
 #
 import cv2 as cv
 import numpy as np
+# 1.平移
+# tx,ty 水平和垂直平移量
+# background 为图片外像素的颜色底色
+# 缺点 ： 现在做的平移不超过原来的画布大小,opencv的可以设置画布大小
+#        而且没有适配灰度图（做一个分支判断就行）
+def translation(img,tx=0,ty=0,background=[255,255,255]):
+    # 获取原画布的尺寸
+    h,w = img.shape[:2]
+    # 平移后 的画布大小不变
+    target_matrix = np.zeros([h,w,img.shape[2]],dtype=np.uint8)
+    # 映射矩阵
+    Matrix_change = np.array([[1,0,-tx],[0,1,-ty],[0,0,1]])
+    for target_y in range(h):
+        for target_x in range(w):
+            # 齐次坐标，目标点的
+            target_hom = np.array([target_x, target_y, 1],dtype=np.int32)
+            # 计算得到原来的图的坐标
+            src_hom = np.matmul(Matrix_change,target_hom,dtype=np.int32)
+            # 对应原来像素的坐标
+            src_x = src_hom[0]
+            src_y = src_hom[1]
+            if(src_x <0 or src_y <0 or src_x >w-1 or src_y >h-1):
+                target_matrix[target_y,target_x] = background
+            else:
+                target_matrix[target_y,target_x] = img[src_y,src_x]
+    return target_matrix
 
 # 2.缩放
 def resize(img,target_h,target_w,mode):
@@ -52,10 +78,11 @@ def resize(img,target_h,target_w,mode):
                 target_matrix[target_y, target_x] = val.astype(np.uint8)
     return target_matrix
 
+# 3.旋转
+#
+
 
 img = cv.imread('1.jpg')
-resize_img = resize(img,300,500,'linear')
-resize_img2 = resize(img,300,500,'nearest')
-cv.imshow('resize_img',resize_img)
-cv.imshow('resize_img2',resize_img2)
+py_img = translation(img,-200,-200)
+cv.imshow('py_img',py_img)
 cv.waitKey(0)
