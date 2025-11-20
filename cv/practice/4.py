@@ -1,6 +1,7 @@
 # 4.空间滤波器的实现与应用
 import cv2 as cv
 import numpy as np
+from scipy import ndimage
 
 def add_salt_pepper_noise(image, salt_prob=0.02, pepper_prob=0.02):
     """添加椒盐噪声"""
@@ -23,62 +24,55 @@ def add_gaussian_noise(image, mean=0, var=0.005):
     noisy = np.clip(noisy, 0, 1)
     return (noisy * 255).astype(np.uint8)
 
+# 均值滤波算法
 def blur(img, size=3):
+    kernel = np.ones((size, size), np.float32) / (size ** 2)
     h, w, c = img.shape
-    tc = size // 2
-    tc_img = np.pad(img.astype(np.float32), ((tc, tc), (tc, tc), (0, 0)), mode='constant')
-    windows = np.lib.stride_tricks.sliding_window_view(tc_img, (size, size, c))
-    # 正确轴：windows.shape == (h, w, 1, size, size, c)
-    blured = np.mean(windows, axis=(3, 4)).astype(np.uint8)  # 平均空间维度
-    blured = np.squeeze(blured, axis=2)
-    return blured
+    result = np.zeros_like(img, dtype=np.float32)
+    for ch in range(c):
+        result[:, :, ch] = ndimage.convolve(img[:, :, ch].astype(np.float32),kernel,mode='reflect')
 
-def mid(img, size=3):
+    return result.astype(np.uint8)
+
+
+# 中值滤波算法
+def median_blur(img, size=3):
     h, w, c = img.shape
-    tc = size // 2
-    tc_img = np.pad(img.astype(np.float32), ((tc, tc), (tc, tc), (0, 0)), mode='constant')
-    windows = np.lib.stride_tricks.sliding_window_view(tc_img, (size, size, c))
-    # 正确轴：windows.shape == (h, w, 1, size, size, c)
-    mid = np.median(windows, axis=(3, 4)).astype(np.uint8)  # 平均空间维度
-    mid = np.squeeze(mid, axis=2)
-    return mid
-import numpy as np
+    result = np.zeros_like(img, dtype=np.float32)
 
-import numpy as np
+    for ch in range(c):
+        result[:, :, ch] = ndimage.median_filter(img[:, :, ch].astype(np.float32),size=size,mode='reflect')
 
-def gaussian_kernel(size=3, sigma=1.0):
-    """生成高斯核"""
-    ax = np.arange(-size//2 + 1., size//2 + 1.)
-    xx, yy = np.meshgrid(ax, ax)
-    kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma * sigma))
-    kernel = kernel / kernel.sum()
-    return kernel.astype(np.float32)
-
-def gaussian_blur(img, size=3, sigma=1.0):
-    h, w, c = img.shape
-    r = size // 2
-
-    # padding
-    pad_img = np.pad(img.astype(np.float32),
-                     ((r, r), (r, r), (0, 0)),
-                     mode='constant')
-
-    # 生成窗口：shape = (h, w, size, size, c)
-    windows = np.lib.stride_tricks.sliding_window_view(
-        pad_img, (size, size, c)
-    )  # (h, w, 1, size, size, c)
-    windows = windows[:, :, 0]  # 去掉那个 1 → (h, w, size, size, c)
-
-    # 加权
-    kernel = gaussian_kernel(size, sigma)  # (size, size)
-    weighted = windows * kernel[:, :, None]  # 广播 → (h, w, size, size, c)
-
-    # 求和，得到最终 (h, w, c)
-    blured = weighted.sum(axis=(2, 3))
-
-    return blured.astype(np.uint8)
+    return result.astype(np.uint8)
 
 
+# 高斯滤波算法
+# 求解一维高斯核
+def gaussian_kernel_1d(size=5, sigma=1.0):
+    k = size // 2
+    x = np.arange(-k, k+1, 1)
+
+    kernel_1d = np.exp(-(x**2) / (2 * sigma * sigma))
+    kernel_1d = kernel_1d / kernel_1d.sum()  # 归一化
+
+    return kernel_1d.astype(np.float32)
+
+def gaussian_blur(img, size=5, sigma=1.0):
+    g1 = gaussian_kernel_1d(size, sigma)
+
+    # 结果
+    result = np.zeros_like(img, dtype=np.float32)
+
+    # 对每个通道分开处理
+    for ch in range(img.shape[2]):
+        # 横向卷积（1xN）h
+        temp = ndimage.convolve1d(img[:, :, ch], g1, axis=1)
+        # 纵向卷积（Nx1）w
+        temp = ndimage.convolve1d(temp, g1, axis=0)
+
+        result[:, :, ch] = temp
+
+    return result.astype(np.uint8)
 #############################################
 
 
@@ -93,13 +87,14 @@ sp_noisy = add_salt_pepper_noise(img, salt_prob, pepper_prob)
 gauss_noisy = add_gaussian_noise(img, var=gauss_var)
 
 # 均值滤波器
-jz_img = blur(sp_noisy,size=3)
+jz_img = blur(gauss_noisy,size=3)
 # 中值滤波器
-mid_img = mid(sp_noisy,size=3)
-#高斯滤波器
-gauss_img = gaussian_blur(img, size=5, sigma=1.0)
-gasus_edit = np.hstack((gauss_noisy, gauss_img))
+median_img = median_blur(sp_noisy,size=3)
+# 高斯滤波器
+gaussian_img = gaussian_blur(gauss_noisy)
 
-
-cv.imshow('img', gasus_edit)
+cv.imshow('jz_img', jz_img)
+cv.imshow('median_img', median_img)
+cv.imshow('gaussian_img', gaussian_img)
 cv.waitKey(0)
+cv.destroyAllWindows()
