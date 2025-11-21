@@ -7,6 +7,25 @@ import numpy as np
 import cv2 as cv
 from scipy import *
 
+# Prewitt算子
+def Prewitt(img):
+    kx = np.array([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]], dtype=np.float32)
+    ky = np.array([[-1, -1, -1], [0, 0, 0], [1, 1, 1]], dtype=np.float32)
+
+    G_x = ndimage.convolve(img.astype(np.float32), kx, mode='reflect')
+    G_y = ndimage.convolve(img.astype(np.float32), ky, mode='reflect')
+    G = np.sqrt(G_x ** 2 + G_y ** 2)
+
+    G_x = np.abs(G_x)
+    G_y = np.abs(G_y)
+    G = np.abs(G)
+    # 归一化
+    G_x = np.clip(G_x, 0, 255)
+    G_y = np.clip(G_y, 0, 255)
+    G = np.clip(G, 0, 255)
+
+    return G_x.astype(np.uint8), G_y.astype(np.uint8), G.astype(np.uint8)
+
 # Sobel算子算法
 def Sobel(img):
     kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
@@ -16,10 +35,15 @@ def Sobel(img):
     G_y = ndimage.convolve(img.astype(np.float32), ky, mode='reflect')
     G = np.sqrt(G_x ** 2 + G_y ** 2)
 
+    G_x = np.abs(G_x)
+    G_y = np.abs(G_y)
+    G = np.abs(G)
     # 归一化
-    G_x = np.abs(G_x) / np.abs(G_x).max() * 255
-    G_y = np.abs(G_y) / np.abs(G_y).max() * 255
-    G = G / G.max() * 255
+    G_x = np.clip(G_x, 0, 255)
+    G_y = np.clip(G_y, 0, 255)
+
+    # 二值化可增强亮度
+    # G = np.clip(G, 0, 255)
 
     return G_x.astype(np.uint8), G_y.astype(np.uint8), G.astype(np.uint8)
 
@@ -32,13 +56,29 @@ def Scharr(img):
     G_y = ndimage.convolve(img.astype(np.float32), ky, mode='reflect')
     G = np.sqrt(G_x ** 2 + G_y ** 2)
 
+    G_x = np.abs(G_x)
+    G_y = np.abs(G_y)
+    G = np.abs(G)
     # 归一化
-    G_x = np.abs(G_x) / np.abs(G_x).max() * 255
-    G_y = np.abs(G_y) / np.abs(G_y).max() * 255
-    G = G / G.max() * 255
+    G_x = np.clip(G_x, 0, 255)
+    G_y = np.clip(G_y, 0, 255)
+    G = np.clip(G, 0, 255)
+
+    # 二值化可增强亮度
+    # G = np.clip(G, 0, 255)
 
     return G_x.astype(np.uint8), G_y.astype(np.uint8), G.astype(np.uint8)
 
+# Laplace算子
+def Laplace(img,T=100,max_value=255):
+    # 二值阈值化处理
+    kernel = np.array([[0,1,0],[1,-4,1],[0,1,0]], dtype=np.float32)
+
+    lap = ndimage.convolve(img, kernel)
+    lap = np.abs(lap)
+    lap = np.clip(lap, 0, 255)
+
+    return lap.astype(np.uint8)
 #####################################
 # 读取照片
 img = cv.imread('5.jpg',cv.IMREAD_GRAYSCALE).astype(np.float32)
@@ -46,14 +86,13 @@ img = cv.imread('5.jpg',cv.IMREAD_GRAYSCALE).astype(np.float32)
 
 sobel_x, sobel_y, sobel = Sobel(img)
 scharr_x, scharr_y, scharr = Scharr(img)
+prewitt_x, prewitt_y, prewitt = Prewitt(img)
+Laplace = Laplace(img)
 
-cv.imshow('sobel_x', sobel_x)
-cv.imshow('sobel_y', sobel_y)
-cv.imshow('sobel', sobel)
+cv.imshow('Sobel', sobel)
+cv.imshow('Scharr', scharr)
+cv.imshow('Laplace', Laplace)
 
-cv.imshow('scharr_x', scharr_x)
-cv.imshow('scharr_y', scharr_y)
-cv.imshow('scharr', scharr)
 cv.waitKey(0)
 cv.destroyAllWindows()
 
