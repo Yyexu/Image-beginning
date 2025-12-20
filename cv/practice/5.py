@@ -82,73 +82,88 @@ def Laplace(img,T=100,max_value=255):
     return lap.astype(np.uint8)
 
 # Canny算子
-def Canny(img,TL=20, TH=40):
-    # 1. 先将图片进行高斯滤波平滑处理
+def Canny(img,TL=50, TH=100):
+    # 先将图片进行高斯滤波平滑处理
     img = gaussian_blur(img)
-    # 2. 然后算出图片的梯度和角度
+    # 然后算出图片的梯度和角度 Sobel算子
     kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
     ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
     G_x = ndimage.convolve(img.astype(np.float32), kx, mode='reflect')
     G_y = ndimage.convolve(img.astype(np.float32), ky, mode='reflect')
     G = np.sqrt(G_x ** 2 + G_y ** 2)
-    # 转化弧度
-    angle = np.abs(G_y) / (np.abs(G_x) + 1e-6)
-
-    mask0 = angle < 0.4142  # tan(22.5°)
-    mask90 = angle > 2.4142  # tan(67.5°)
-    mask90 = (np.abs(G_x) < 1e-6) | (angle > 2.4142)
-
-    mask45 = (angle >= 0.4142) & (angle <= 2.4142) & (G_x * G_y > 0)
-    mask135 = (angle >= 0.4142) & (angle <= 2.4142) & (G_x * G_y < 0)
-
+    # 转化弧度 1e-6是为了减去误差
+    theta = np.arctan2(G_y, G_x)
+    H, W = G.shape
     Z = np.zeros_like(G)
 
-    # 中心区域（避免越界）
+    # 转成角度制 (0~180)
+    angle = np.rad2deg(theta)
+    # 负读书加180度
+    angle[angle < 0] += 180
+
+    # 中心区域 避免图片边界
     c = G[1:-1, 1:-1]
 
-    # ---------------------------
-    # 0° 水平方向：比较左右
-    # ---------------------------
-    m = mask0[1:-1, 1:-1]
+    # ==========================
+    #     方向分类（精确角度）
+    # 0°, 45°, 90°, 135°
+    # ==========================
+
+    # 0°: -22.5° ~ 22.5°，157.5° ~ 180°
+    mask0 = ((angle <= 22.5) | (angle >= 157.5))[1:-1, 1:-1]
+
+    # 45°: 22.5° ~ 67.5°
+    mask45 = ((angle > 22.5) & (angle <= 67.5))[1:-1, 1:-1]
+
+    # 90°: 67.5° ~ 112.5°
+    mask90 = ((angle > 67.5) & (angle <= 112.5))[1:-1, 1:-1]
+
+    # 135°: 112.5° ~ 157.5°
+    mask135 = ((angle > 112.5) & (angle <= 157.5))[1:-1, 1:-1]
+
+    # ==========================
+    #  方向 0° → 比较左右
+    # ==========================
     left = G[1:-1, :-2]
     right = G[1:-1, 2:]
-    keep = (c >= left) & (c >= right) & m
+    keep = (c >= left) & (c >= right) & mask0
     Z[1:-1, 1:-1][keep] = c[keep]
 
-    # ---------------------------
-    # 45° 斜方向：左下 & 右上
-    # ---------------------------
-    m = mask45[1:-1, 1:-1]
-    right_up = G[:-2, 2:]
-    left_down = G[2:, :-2]
-    keep = (c >= right_up) & (c >= left_down) & m
+    # ==========================
+    #  方向 45° → 比较右上 & 左下
+    # ==========================
+    right_up = G[:-2, 2:]  # ↗
+    left_down = G[2:, :-2]  # ↙
+    keep = (c >= right_up) & (c >= left_down) & mask45
     Z[1:-1, 1:-1][keep] = c[keep]
 
-    # ---------------------------
-    # 90° 垂直方向：上 & 下
-    # ---------------------------
-    m = mask90[1:-1, 1:-1]
+    # ==========================
+    #  方向 90° → 上 & 下
+    # ==========================
     up = G[:-2, 1:-1]
     down = G[2:, 1:-1]
-    keep = (c >= up) & (c >= down) & m
+    keep = (c >= up) & (c >= down) & mask90
     Z[1:-1, 1:-1][keep] = c[keep]
 
-    # ---------------------------
-    # 135° 斜方向：左上 & 右下
-    # ---------------------------
-    m = mask135[1:-1, 1:-1]
-    left_up = G[:-2, :-2]
-    right_down = G[2:, 2:]
-    keep = (c >= left_up) & (c >= right_down) & m
+    # ==========================
+    #  方向 135° → 左上 & 右下
+    # ==========================
+    left_up = G[:-2, :-2]  # ↖
+    right_down = G[2:, 2:]  # ↘
+    keep = (c >= left_up) & (c >= right_down) & mask135
     Z[1:-1, 1:-1][keep] = c[keep]
 
+    # 双阈值
+    # 大于High的为强点
     strong = (Z >= TH)
+    # 大于Low小于High的是弱点
     weak = (Z >= TL) & (Z < TH)
-
+    # 结果 先默认全为0
     res = np.zeros_like(Z, dtype=np.uint8)
     res[strong] = 255
-    res[weak] = 100
+    res[weak] = 50
 
+    # 滞后连接
     q = deque()
     H, W = res.shape
     # 把所有 strong 边缘放入队列
@@ -166,7 +181,7 @@ def Canny(img,TL=20, TH=40):
 
             ny, nx = y + dy, x + dx
 
-            if 0 <= ny < H and 0 <= nx < W and res[ny, nx] == 100:
+            if 0 <= ny < H and 0 <= nx < W and res[ny, nx] == 50:
                 res[ny, nx] = 255  # promote weak → strong
                 q.append((ny, nx))
 
@@ -193,6 +208,7 @@ def gaussian_blur(img, size=5, sigma=1.0):
     # 纵向卷积（Nx1）w
     temp = ndimage.convolve1d(temp, g1, axis=0, mode='reflect')
     result[:, :] = temp
+    # 不返回np.uint8，不然会影响Canny的精度
     return result
 
 
@@ -207,8 +223,8 @@ prewitt_x, prewitt_y, prewitt = Prewitt(img)
 Laplace = Laplace(img)
 '''
 
-img_canny = Canny(img)
-cv.imshow('img_canny', img_canny)
+img_canny2 = Canny(img,25,50)
+cv.imshow('img_canny2', img_canny2)
 cv.waitKey(0)
 cv.destroyAllWindows()
 

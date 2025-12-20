@@ -12,136 +12,182 @@ def translation(img,tx=0,ty=0,background=[255,255,255]):
     # 获取原画布的尺寸
     h,w = img.shape[:2]
     # 平移后 的画布大小不变
-    target_matrix = np.zeros([h,w,img.shape[2]],dtype=np.uint8)
+    target_matrix = np.full((h,w,img.shape[2]), background ,dtype=np.uint8)
+
+    yy, xx = np.indices((h, w))
+    ones = np.ones((h,w))
+    target_hom = np.stack([xx, yy, ones], axis=-1).reshape(-1,3)
     # 映射矩阵
     matrix_change = np.array([[1,0,-tx],[0,1,-ty],[0,0,1]])
-    for target_y in range(h):
-        for target_x in range(w):
-            # 齐次坐标，目标点的
-            target_hom = np.array([target_x, target_y, 1],dtype=np.int32)
-            # 计算得到原来的图的坐标
-            src_hom = np.matmul(matrix_change,target_hom,dtype=np.int32)
-            # 对应原来像素的坐标
-            src_x = src_hom[0]
-            src_y = src_hom[1]
-            if src_x <0 or src_y <0 or src_x >w-1 or src_y >h-1:
-                target_matrix[target_y,target_x] = background
-            else:
-                target_matrix[target_y,target_x] = img[src_y,src_x]
+
+    src_hom = target_hom @ matrix_change.T
+
+    src_x = src_hom[:, 0].astype(int).reshape(h, w)
+    src_y = src_hom[:, 1].astype(int).reshape(h, w)
+
+    mask = (src_x >= 0) & (src_x < w) & (src_y >= 0) & (src_y < h)
+
+    # 合法范围的像素赋值 筛选符合
+    target_matrix[mask] = img[src_y[mask], src_x[mask]]
+
     return target_matrix
 
-# 2.缩放
+
+
+# 2.缩放(已修改)
 # target_h target_w 期望缩放成的高和宽像素
 # mode (nearest、linear)两种插值方法
-def resize(img,target_h,target_w,mode='nearest'):
+
+def resize(img, target_h, target_w, mode='nearest', background=[255,255,255]):
     # 获取原图的高和宽
     orig_h, orig_w = img.shape[:2]
-    # 构造目标像素的画布（无颜色）
-    target_matrix = np.zeros((target_h,target_w,img.shape[2]),dtype=np.uint8)
-    # 获取缩放比例（反映射） 比例 = 原来/目标
+    # 构造目标像素的画布（初始化为背景色）
+    target_matrix = np.full((target_h, target_w, img.shape[2]), background, dtype=np.uint8)
+    # 获取缩放比例（反映射） 比例 = 原来 / 目标
     h_scale = orig_h / target_h
     w_scale = orig_w / target_w
-    # 构造变换矩阵的逆矩阵 3x3
-    matrix_change = np.array([[w_scale,0,0],[0,h_scale,0],[0,0,1]])
-    # 循环目标画布的像素，因为是反映射
-    for target_y in range(target_h):
-        for target_x in range(target_w):
-            # 目标的齐次坐标
-            target_hom = np.array([target_x, target_y, 1], dtype=np.float32)
-            # 计算原来的齐次坐标 B=AX
-            src_hom = np.matmul(matrix_change,target_hom,dtype=np.float32)
-            # 计算原来的坐标，并采用不同的插值方法求整数像素值
-            src_x = src_hom[0]
-            src_y = src_hom[1]
-            # 最近邻插值
-            if mode == 'nearest':
-                # round + 防越界
-                src_x = np.clip(round(src_x), 0, orig_w - 1)
-                src_y = np.clip(round(src_y), 0, orig_h - 1)
-                target_matrix[target_y, target_x] = img[src_y, src_x]
-            # 双线性插值
-            elif mode == 'linear':
-                # 求周围四点像素的坐标
-                y0, y1 = int(np.floor(src_y)), int(np.ceil(src_y))
-                x0, x1 = int(np.floor(src_x)), int(np.ceil(src_x))
-                # 防越界
-                y0 = np.clip(y0, 0, orig_h-1)
-                y1 = np.clip(y1, 0, orig_h-1)
-                x0 = np.clip(x0, 0, orig_w-1)
-                x1 = np.clip(x1, 0, orig_w-1)
-                # 计算权重 floor取下限，为正值（0-1）
-                dy = src_y - y0
-                dx = src_x - x0
-                # 左下+右下+左上+右上
-                val = (1 - dy) * (1 - dx) * img[y0, x0] + \
-                      (1 - dy) * dx * img[y0, x1] + \
-                      dy * (1 - dx) * img[y1, x0] + \
-                      dy * dx * img[y1, x1]
-                target_matrix[target_y, target_x] = val.astype(np.uint8)
+
+    # 分别生成0-(h-1) 和0-(w-1)的整数网格
+    yy, xx = np.indices((target_h, target_w))
+    ones = np.ones_like(xx)
+    target_hom = np.stack([xx, yy, ones], axis=-1).reshape(-1, 3)
+
+    # ---- 构造缩放变换矩阵（反映射） ----
+    matrix_change = np.array([[w_scale, 0, 0],
+                              [0, h_scale, 0],
+                              [0, 0, 1]], dtype=np.float32)
+
+    # ---- 一次性计算所有原图坐标 ---- 广播 hxw,3
+    src_hom = target_hom @ matrix_change.T
+    # 还原成hxw的坐标网格
+    src_x = src_hom[:, 0].reshape(target_h, target_w)
+    src_y = src_hom[:, 1].reshape(target_h, target_w)
+
+    # -------------------- 最近邻插值 --------------------
+    if mode == 'nearest':
+        src_xn = np.round(src_x).astype(int)
+        src_yn = np.round(src_y).astype(int)
+
+        # 越界检测 2x2
+        mask = (src_xn >= 0) & (src_xn < orig_w) & (src_yn >= 0) & (src_yn < orig_h)
+
+        # 合法范围的像素赋值 筛选符合
+        target_matrix[mask] = img[src_yn[mask], src_xn[mask]]
+
+    # -------------------- 双线性插值 --------------------
+    elif mode == 'linear':
+        # 计算四邻点
+        x0 = np.floor(src_x).astype(int)
+        x1 = x0 + 1
+        y0 = np.floor(src_y).astype(int)
+        y1 = y0 + 1
+
+        # 越界检测（必须保证四点都在范围内）
+        mask = (x0 >= 0) & (x1 < orig_w) & (y0 >= 0) & (y1 < orig_h)
+
+        # 权重
+        dx = src_x - x0
+        dy = src_y - y0
+
+        # 只对合法区域进行插值
+        valid = np.where(mask)
+        Ia = img[y0[valid], x0[valid]]
+        Ib = img[y0[valid], x1[valid]]
+        Ic = img[y1[valid], x0[valid]]
+        Id = img[y1[valid], x1[valid]]
+
+        wx = dx[valid][:, np.newaxis]
+        wy = dy[valid][:, np.newaxis]
+
+        # 双线性插值公式
+        val = ((1 - wy) * ((1 - wx) * Ia + wx * Ib) +
+               wy * ((1 - wx) * Ic + wx * Id)).astype(np.uint8)
+
+        target_matrix[valid] = val
+
     return target_matrix
 
-# 3.旋转
+
+# 3.旋转(已修改)
 # center 为旋转中心点的元组，默认为图像中心(None)
 # scale 缩放倍率，和resize不同，直接写倍率这个是，默认为1
 # angle 旋转角度，默认为逆时针旋转
 # background 填补空白区域的颜色
 # mode (nearest、linear)两种插值方法
-def rotate(img,center=None,scale=1,angle=0,background=[255,255,255],mode='nearest'):
-    # 获取原来图片大小的高和宽
-    h,w = img.shape[:2]
-    # 设置旋转中心点
+def rotate_fast(img, center=None, scale=1, angle=0, background=[255,255,255], mode='nearest'):
+    h, w = img.shape[:2]
     if center is None:
-        center_x = w/2
-        center_y = h/2
+        cx, cy = w / 2, h / 2
     else:
-        center_x = center[0]
-        center_y = center[1]
-    # 创建同样大小的新画布
-    target_matrix = np.zeros([h,w,img.shape[2]],dtype=np.uint8)
-    # 得到角度的sin和cos值备用
-    sin_angle = np.sin(angle*np.pi/180)
-    cos_angle = np.cos(angle*np.pi/180)
-    # 构建变换矩阵
-    matrix_change = np.array([[scale*cos_angle,-scale*sin_angle,(1-scale*cos_angle)*center_x+scale*sin_angle*center_y],[scale*sin_angle,scale*cos_angle,center_y*(1-scale*cos_angle)-scale*center_x*sin_angle],[0,0,1]])
-    M_inv = np.linalg.inv(matrix_change)
-    for target_y in range(h):
-        for target_x in range(w):
-            # 目标点的坐标
-            target_hom = np.array([target_x, target_y, 1], dtype=np.float32)
-            # 计算得到原始点的坐标
-            src_hom = np.matmul(M_inv,target_hom,dtype=np.float32)
-            # 得到原始点的X和Y
-            src_x = src_hom[0]
-            src_y = src_hom[1]
-            if mode == 'nearest':
-                src_x = round(src_x)
-                src_y = round(src_y)
-                if src_x<0 or src_y<0 or src_x>w-1 or src_y>h-1:
-                    target_matrix[target_y,target_x] = background
-                else:
-                    target_matrix[target_y, target_x] = img[src_y, src_x]
-            elif mode == 'linear':
-                y0, y1 = int(np.floor(src_y)), int(np.ceil(src_y))
-                x0, x1 = int(np.floor(src_x)), int(np.ceil(src_x))
-                # 计算权重 floor取下限，为正值（0-1）
-                if 0 <= x0 < w and 0 <= x1 < w and 0 <= y0 < h and 0 <= y1 < h:
-                    # 计算插值权重（0~1）
-                    dy = src_y - y0
-                    dx = src_x - x0
-                    # 双线性插值公式
-                    val = (1 - dy) * (1 - dx) * img[y0, x0] + \
-                            (1 - dy) * dx * img[y0, x1] + \
-                            dy * (1 - dx) * img[y1, x0] + \
-                            dy * dx * img[y1, x1]
-                    # 转换为uint8类型
-                    target_matrix[target_y, target_x] = val.astype(np.uint8)
-                else:
-                    target_matrix[target_y, target_x] = background
-    return target_matrix
+        cx, cy = center
+
+    # 构造目标坐标网格
+    yy, xx = np.indices((h, w))
+    ones = np.ones_like(xx)
+    target_hom = np.stack([xx, yy, ones], axis=-1).reshape(-1, 3)
+
+    # 旋转矩阵
+    sin_a = np.sin(np.deg2rad(angle))
+    cos_a = np.cos(np.deg2rad(angle))
+    M = np.array([
+        [scale * cos_a, -scale * sin_a, (1 - scale * cos_a) * cx + scale * sin_a * cy],
+        [scale * sin_a,  scale * cos_a, (1 - scale * cos_a) * cy - scale * sin_a * cx],
+        [0, 0, 1]
+    ])
+    M_inv = np.linalg.inv(M)
+
+    # 一次性反映射
+    src_hom = target_hom @ M_inv.T
+    src_x = src_hom[:, 0].reshape(h, w)
+    src_y = src_hom[:, 1].reshape(h, w)
+
+    # 输出初始化为 background
+    out = np.full_like(img, background, dtype=np.uint8)
+
+    if mode == 'nearest':
+        src_xn = np.round(src_x).astype(int)
+        src_yn = np.round(src_y).astype(int)
+        mask = (src_xn >= 0) & (src_xn < w) & (src_yn >= 0) & (src_yn < h)
+        out[mask] = img[src_yn[mask], src_xn[mask]]
+
+    elif mode == 'linear':
+        # 计算四邻坐标
+        x0 = np.floor(src_x).astype(int)
+        x1 = x0 + 1
+        y0 = np.floor(src_y).astype(int)
+        y1 = y0 + 1
+
+        # 合法范围掩码 (避免拉伸)
+        mask = (x0 >= 0) & (x1 < w) & (y0 >= 0) & (y1 < h)
+
+        # 权重
+        dx = src_x - x0
+        dy = src_y - y0
+
+        # 只对合法区域做插值
+        valid = np.where(mask)
+        Ia = img[y0[valid], x0[valid]]
+        Ib = img[y0[valid], x1[valid]]
+        Ic = img[y1[valid], x0[valid]]
+        Id = img[y1[valid], x1[valid]]
+
+        wx = dx[valid][:, None]
+        wy = dy[valid][:, None]
+
+        interp = ((1 - wy) * ((1 - wx) * Ia + wx * Ib) +
+                  wy * ((1 - wx) * Ic + wx * Id)).astype(np.uint8)
+
+        out[valid] = interp
+
+    return out
 
 
 
-img = cv.imread('1.jpg')
-sf_img = rotate(img,None,0.5,90)
-cv.imshow('py_img',sf_img)
+img = cv.imread("1.jpg")  # cv2读取为BGR格式（不影响平移逻辑）
+
+tranlated_img = resize(img,750,400)
+# 显示结果
+cv.imshow("Original", img)
+cv.imshow("Translated", tranlated_img)
 cv.waitKey(0)
+cv.destroyAllWindows()
